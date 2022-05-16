@@ -78,6 +78,10 @@ struct _GstImxV4l2VideoSrc
 	guint metaCropY;
 	guint metaCropWidth;
 	guint metaCropHeight;
+	gint brightness;
+	gint contrast;
+	gint hue;
+	gint saturation;
 };
 
 struct _GstImxV4l2VideoSrcClass

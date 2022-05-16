@@ -38,6 +38,10 @@
 #define DEFAULT_DEVICE "/dev/video0"
 #define DEFAULT_NUM_ADDITIONAL_BUFFERS 1
 #define DEFAULT_QUEUE_SIZE 6
+#define DEFAULT_BRIGHTNESS 0x00
+#define DEFAULT_CONTRAST 0x80
+#define DEFAULT_HUE 0x00
+#define DEFAULT_SATURATION 0x80
 #define DEFAULT_CROP_META_X 0
 #define DEFAULT_CROP_META_Y 0
 #define DEFAULT_CROP_META_WIDTH 0
@@ -57,6 +61,10 @@ enum
 	IMX_V4L2SRC_CROP_META_Y,
 	IMX_V4L2SRC_CROP_META_WIDTH,
 	IMX_V4L2SRC_CROP_META_HEIGHT,
+	IMX_V4L2SRC_BRIGHTNESS,
+	IMX_V4L2SRC_CONTRAST,
+	IMX_V4L2SRC_HUE,
+	IMX_V4L2SRC_SATURATION,
 
 	/* Properties required to be recongnized by GstPhotography implementor */
 	PROP_WB_MODE,
@@ -114,6 +122,8 @@ static gboolean gst_imx_v4l2src_set_focus_mode(GstPhotography *photo,
 		GstPhotographyFocusMode focus_mode);
 static gboolean gst_imx_v4l2src_get_focus_mode(GstPhotography *photo,
 		GstPhotographyFocusMode *focus_mode);
+
+static void gst_imx_v4l2_src_apply_controls(GstImxV4l2VideoSrc *v4l2src);
 
 static gboolean gst_imx_v4l2src_is_tvin(GstImxV4l2VideoSrc *v4l2src, gint fd_v4l)
 {
@@ -340,6 +350,8 @@ static gboolean gst_imx_v4l2src_start(GstBaseSrc *src)
 	}
 
 	v4l2src->fd_obj_v4l = gst_fd_object_new(fd_v4l);
+
+	gst_imx_v4l2_src_apply_controls(v4l2src);
 
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	if (ioctl(GST_IMX_FD_OBJECT_GET_FD(v4l2src->fd_obj_v4l), VIDIOC_G_FMT, &fmt) < 0)
@@ -749,6 +761,22 @@ static void gst_imx_v4l2src_set_property(GObject *object, guint prop_id,
 			gst_imx_v4l2src_set_focus_mode(GST_PHOTOGRAPHY(v4l2src), g_value_get_enum(value));
 			break;
 
+		case IMX_V4L2SRC_BRIGHTNESS:
+			v4l2src->brightness = g_value_get_int(value);
+			break;
+
+		case IMX_V4L2SRC_CONTRAST:
+			v4l2src->contrast = g_value_get_int(value);
+			break;
+
+		case IMX_V4L2SRC_HUE:
+			v4l2src->hue = g_value_get_int(value);
+			break;
+
+		case IMX_V4L2SRC_SATURATION:
+			v4l2src->saturation = g_value_get_int(value);
+			break;
+
 		case PROP_WB_MODE:
 		case PROP_COLOR_TONE:
 		case PROP_SCENE_MODE:
@@ -827,6 +855,22 @@ static void gst_imx_v4l2src_get_property(GObject *object, guint prop_id,
 
 		case IMX_V4L2SRC_CROP_META_HEIGHT:
 			g_value_set_int(value, v4l2src->metaCropHeight);
+			break;
+
+		case IMX_V4L2SRC_BRIGHTNESS:
+			g_value_set_int(value, v4l2src->brightness);
+			break;
+
+		case IMX_V4L2SRC_CONTRAST:
+			g_value_set_int(value, v4l2src->contrast);
+			break;
+
+		case IMX_V4L2SRC_HUE:
+			g_value_set_int(value, v4l2src->hue);
+			break;
+
+		case IMX_V4L2SRC_SATURATION:
+			g_value_set_int(value, v4l2src->saturation);
 			break;
 
 		case PROP_FOCUS_MODE:
@@ -937,6 +981,10 @@ static void gst_imx_v4l2src_init(GstImxV4l2VideoSrc *v4l2src)
 	v4l2src->metaCropY = DEFAULT_CROP_META_Y;
 	v4l2src->metaCropWidth = DEFAULT_CROP_META_WIDTH;
 	v4l2src->metaCropHeight = DEFAULT_CROP_META_HEIGHT;
+	v4l2src->brightness = DEFAULT_BRIGHTNESS;
+	v4l2src->contrast = DEFAULT_CONTRAST;
+	v4l2src->hue = DEFAULT_HUE;
+	v4l2src->saturation = DEFAULT_SATURATION;
 
 	g_mutex_init(&v4l2src->af_mutex);
 	v4l2src->focus_mode = GST_PHOTOGRAPHY_FOCUS_MODE_AUTO;
@@ -1046,6 +1094,30 @@ static void gst_imx_v4l2src_class_init(GstImxV4l2VideoSrcClass *klass)
 			g_param_spec_int("crop-meta-height", "Crop meta HEIGHT",
 				"HEIGHT value for crop metadata",
 				0, G_MAXINT, DEFAULT_CROP_META_HEIGHT,
+				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property(gobject_class, IMX_V4L2SRC_BRIGHTNESS,
+			g_param_spec_int("brightness", "Brightness",
+				"Brightness value to set",
+				0, G_MAXINT, DEFAULT_BRIGHTNESS,
+				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property(gobject_class, IMX_V4L2SRC_CONTRAST,
+			g_param_spec_int("contrast", "Contrast",
+				"Contrast value to set",
+				0, G_MAXINT, DEFAULT_CONTRAST,
+				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property(gobject_class, IMX_V4L2SRC_HUE,
+			g_param_spec_int("hue", "Hue",
+				"Hue value to set",
+				0, G_MAXINT, DEFAULT_HUE,
+				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	g_object_class_install_property(gobject_class, IMX_V4L2SRC_SATURATION,
+			g_param_spec_int("saturation", "Saturation",
+				"Saturation value to set",
+				0, G_MAXINT, DEFAULT_SATURATION,
 				G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 	/* Being GstPhotography implementation implies overriding all properties
@@ -1201,6 +1273,14 @@ static inline const char *ctrl_name(int id)
 			return "V4L2_CID_AUTO_FOCUS_STATUS";
 		case V4L2_CID_3A_LOCK:
 			return "V4L2_CID_3A_LOCK";
+		case V4L2_CID_BRIGHTNESS:
+			return "V4L2_CID_BRIGHTNESS";
+		case V4L2_CID_CONTRAST:
+			return "V4L2_CID_CONTRAST";
+		case V4L2_CID_HUE:
+			return "V4L2_CID_HUE";
+		case V4L2_CID_SATURATION:
+			return "V4L2_CID_SATURATION";
 		default:
 			return "<fixme>";
 	}
@@ -1242,6 +1322,30 @@ static inline int v4l2_s_ctrl(GstImxV4l2VideoSrc *v4l2src, int id, int value)
 		GST_LOG_OBJECT(v4l2src, "VIDIOC_S_CTRL(%s, %d) succeed", ctrl_name(id), value);
 
 	return ret;
+}
+
+static void gst_imx_v4l2_src_apply_controls(GstImxV4l2VideoSrc *v4l2src)
+{
+	int ret;
+
+	/* Apply brightness, contrast, hue and saturation control values */
+	ret = v4l2_s_ctrl(v4l2src, V4L2_CID_BRIGHTNESS, v4l2src->brightness);
+	if (ret)
+		GST_ERROR_OBJECT(v4l2src, "Failed to apply Brightness setting, ret=%d", ret);
+
+	ret = v4l2_s_ctrl(v4l2src, V4L2_CID_CONTRAST, v4l2src->contrast);
+	if (ret)
+		GST_ERROR_OBJECT(v4l2src, "Failed to apply Contrast setting, ret=%d", ret);
+
+	ret = v4l2_s_ctrl(v4l2src, V4L2_CID_HUE, v4l2src->hue);
+	if (ret)
+		GST_ERROR_OBJECT(v4l2src, "Failed to apply Hue setting, ret=%d", ret);
+
+	ret = v4l2_s_ctrl(v4l2src, V4L2_CID_SATURATION, v4l2src->saturation);
+	if (ret)
+		GST_ERROR_OBJECT(v4l2src, "Failed to apply Saturation setting, ret=%d", ret);
+
+	return;
 }
 
 static void gst_imx_v4l2src_apply_focus_settings(GstImxV4l2VideoSrc *v4l2src,
