@@ -25,6 +25,7 @@
 #include "allocator.h"
 #include "device.h"
 #include "../common/phys_mem_meta.h"
+#include <linux/types.h>
 
 
 GST_DEBUG_CATEGORY_STATIC(imx_ipu_blitter_debug);
@@ -33,6 +34,8 @@ GST_DEBUG_CATEGORY_STATIC(imx_ipu_blitter_debug);
 
 G_DEFINE_TYPE(GstImxIpuBlitter, gst_imx_ipu_blitter, GST_TYPE_IMX_BLITTER)
 
+typedef __u8 u8;
+typedef __u32 u32;
 
 /* Private structure storing IPU specific data */
 struct _GstImxIpuBlitterPrivate
