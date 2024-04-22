@@ -124,6 +124,7 @@ static gboolean gst_imx_v4l2src_get_focus_mode(GstPhotography *photo,
 		GstPhotographyFocusMode *focus_mode);
 
 static void gst_imx_v4l2_src_apply_controls(GstImxV4l2VideoSrc *v4l2src);
+static inline int v4l2_s_ctrl(GstImxV4l2VideoSrc *v4l2src, int id, int value);
 
 static gboolean gst_imx_v4l2src_is_tvin(GstImxV4l2VideoSrc *v4l2src, gint fd_v4l)
 {
@@ -707,6 +708,7 @@ static void gst_imx_v4l2src_set_property(GObject *object, guint prop_id,
 		const GValue *value, GParamSpec *pspec)
 {
 	GstImxV4l2VideoSrc *v4l2src = GST_IMX_V4L2SRC(object);
+	int ret;
 
 	switch (prop_id)
 	{
@@ -763,18 +765,46 @@ static void gst_imx_v4l2src_set_property(GObject *object, guint prop_id,
 
 		case IMX_V4L2SRC_BRIGHTNESS:
 			v4l2src->brightness = g_value_get_int(value);
+			if (v4l2src->fd_obj_v4l) {
+				ret = v4l2_s_ctrl(v4l2src, V4L2_CID_BRIGHTNESS, v4l2src->brightness);
+				if (ret)
+					GST_ERROR_OBJECT(v4l2src, "Failed to apply Brightness setting, ret=%d", ret);
+			} else {
+				GST_ERROR_OBJECT(v4l2src, "fd_obj_v4l is not allocated");
+			}
 			break;
 
 		case IMX_V4L2SRC_CONTRAST:
 			v4l2src->contrast = g_value_get_int(value);
+			if (v4l2src->fd_obj_v4l) {
+				ret = v4l2_s_ctrl(v4l2src, V4L2_CID_CONTRAST, v4l2src->contrast);
+				if (ret)
+					GST_ERROR_OBJECT(v4l2src, "Failed to apply Contrast setting, ret=%d", ret);
+			} else {
+				GST_ERROR_OBJECT(v4l2src, "fd_obj_v4l is not allocated");
+			}
 			break;
 
 		case IMX_V4L2SRC_HUE:
 			v4l2src->hue = g_value_get_int(value);
+			if (v4l2src->fd_obj_v4l) {
+				ret = v4l2_s_ctrl(v4l2src, V4L2_CID_HUE, v4l2src->hue);
+				if (ret)
+					GST_ERROR_OBJECT(v4l2src, "Failed to apply Hue setting, ret=%d", ret);
+			} else {
+				GST_ERROR_OBJECT(v4l2src, "fd_obj_v4l is not allocated");
+			}
 			break;
 
 		case IMX_V4L2SRC_SATURATION:
 			v4l2src->saturation = g_value_get_int(value);
+			if (v4l2src->fd_obj_v4l) {
+				ret = v4l2_s_ctrl(v4l2src, V4L2_CID_SATURATION, v4l2src->saturation);
+				if (ret)
+					GST_ERROR_OBJECT(v4l2src, "Failed to apply Saturation setting, ret=%d", ret);
+			} else {
+				GST_ERROR_OBJECT(v4l2src, "fd_obj_v4l is not allocated");
+			}
 			break;
 
 		case PROP_WB_MODE:
