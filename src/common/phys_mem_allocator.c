@@ -24,6 +24,9 @@
 #include <gst/allocators/gstphysmemory.h>
 #endif
 
+#define _GNU_SOURCE
+#include <unistd.h>
+#include <sys/types.h>
 
 GST_DEBUG_CATEGORY_STATIC(imx_phys_mem_allocator_debug);
 #define GST_CAT_DEFAULT imx_phys_mem_allocator_debug
@@ -170,8 +173,10 @@ static GstMemory* gst_imx_phys_mem_allocator_alloc(GstAllocator *allocator, gsiz
 	maxsize = size + params->prefix + params->padding;
 	phys_mem = gst_imx_phys_mem_allocator_alloc_internal(allocator, NULL, maxsize, params->flags, params->align, params->prefix, size);
 
-	if (phys_mem != NULL)
+	if (phys_mem != NULL) {
 		GST_INFO_OBJECT(allocator, "allocated memory block %p at phys addr %" GST_IMX_PHYS_ADDR_FORMAT " with %u bytes", (gpointer)phys_mem, phys_mem->phys_addr, size);
+		g_mutex_init(&(phys_mem->lock));
+	}
 	else
 		GST_WARNING_OBJECT(allocator, "could not allocate memory block with %u bytes", size);
 
@@ -185,9 +190,14 @@ static void gst_imx_phys_mem_allocator_free(GstAllocator *allocator, GstMemory *
 	GstImxPhysMemAllocator *phys_mem_alloc = GST_IMX_PHYS_MEM_ALLOCATOR(allocator);
 	GstImxPhysMemAllocatorClass *klass = GST_IMX_PHYS_MEM_ALLOCATOR_CLASS(G_OBJECT_GET_CLASS(allocator));
 
+	g_mutex_lock(&(phys_mem->lock));
+
 	klass->free_phys_mem(phys_mem_alloc, phys_mem);
 
 	GST_INFO_OBJECT(allocator, "freed block %p at phys addr %" GST_IMX_PHYS_ADDR_FORMAT " with size: %u", (gpointer)memory, phys_mem->phys_addr, memory->size);
+
+	g_mutex_unlock(&(phys_mem->lock));
+	g_mutex_clear(&(phys_mem->lock));
 
 	g_slice_free1(sizeof(GstImxPhysMemory), phys_mem);
 }
@@ -201,22 +211,29 @@ static gpointer gst_imx_phys_mem_allocator_map(GstMemory *mem, gsize maxsize, Gs
 
 	GST_LOG_OBJECT(phys_mem_alloc, "mapping %u bytes from memory block %p (phys addr %" GST_IMX_PHYS_ADDR_FORMAT "), current mapping refcount = %ld -> %ld", maxsize, (gpointer)mem, phys_mem->phys_addr, phys_mem->mapping_refcount, phys_mem->mapping_refcount + 1);
 
+	g_mutex_lock(&(phys_mem->lock));
+
 	phys_mem->mapping_refcount++;
 
 	/* In GStreamer, it is not possible to map the same buffer several times
 	 * with different flags. Therefore, it is safe to use refcounting here,
 	 * since the value of "flags" will be the same with multiple map calls. */
+	gpointer return_addr = NULL;
 
 	if (phys_mem->mapping_refcount == 1)
 	{
 		phys_mem->mapping_flags = flags;
-		return klass->map_phys_mem(phys_mem_alloc, phys_mem, maxsize, flags);
+		return_addr = klass->map_phys_mem(phys_mem_alloc, phys_mem, maxsize, flags);
+		g_mutex_unlock(&(phys_mem->lock));
 	}
 	else
 	{
 		g_assert(phys_mem->mapping_flags == flags);
-		return phys_mem->mapped_virt_addr;
+		return_addr = phys_mem->mapped_virt_addr;
+		g_mutex_unlock(&(phys_mem->lock));
 	}
+
+	return return_addr;
 }
 
 
@@ -228,19 +245,26 @@ static void gst_imx_phys_mem_allocator_unmap(GstMemory *mem)
 
 	GST_LOG_OBJECT(phys_mem_alloc, "unmapping memory block %p (phys addr %" GST_IMX_PHYS_ADDR_FORMAT "), current mapping refcount = %ld -> %ld", (gpointer)mem, phys_mem->phys_addr, phys_mem->mapping_refcount, (phys_mem->mapping_refcount > 0) ? (phys_mem->mapping_refcount - 1) : 0);
 
+	g_mutex_lock(&(phys_mem->lock));
+
 	if (phys_mem->mapping_refcount > 0)
 	{
 		phys_mem->mapping_refcount--;
 		if (phys_mem->mapping_refcount == 0)
 			klass->unmap_phys_mem(phys_mem_alloc, phys_mem);
 	}
+
+	g_mutex_unlock(&(phys_mem->lock));
 }
 
 
 static GstMemory* gst_imx_phys_mem_allocator_copy(GstMemory *mem, gssize offset, gssize size)
 {
+	GstImxPhysMemory *src_mem = (GstImxPhysMemory*) mem;
 	GstImxPhysMemory *copy;
 	GstImxPhysMemAllocator *phys_mem_alloc = (GstImxPhysMemAllocator*)(mem->allocator);
+
+	g_mutex_lock(&(src_mem->lock));
 
 	if (size == -1)
 		size = ((gssize)(mem->size) > offset) ? (mem->size - offset) : 0;
@@ -249,12 +273,14 @@ static GstMemory* gst_imx_phys_mem_allocator_copy(GstMemory *mem, gssize offset,
 	if (copy == NULL)
 	{
 		GST_ERROR_OBJECT(phys_mem_alloc, "could not copy memory block - allocation failed");
+		g_mutex_unlock(&(src_mem->lock));
 		return NULL;
 	}
 
 	{
 		gpointer srcptr, destptr;
 		GstImxPhysMemAllocatorClass *klass = GST_IMX_PHYS_MEM_ALLOCATOR_CLASS(G_OBJECT_GET_CLASS(mem->allocator));
+
 
 		srcptr = klass->map_phys_mem(phys_mem_alloc, (GstImxPhysMemory *)mem, mem->maxsize, GST_MAP_READ);
 		destptr = klass->map_phys_mem(phys_mem_alloc, copy, mem->maxsize, GST_MAP_WRITE);
@@ -264,6 +290,8 @@ static GstMemory* gst_imx_phys_mem_allocator_copy(GstMemory *mem, gssize offset,
 		klass->unmap_phys_mem(phys_mem_alloc, copy);
 		klass->unmap_phys_mem(phys_mem_alloc, (GstImxPhysMemory *)mem);
 	}
+
+	g_mutex_unlock(&(src_mem->lock));
 
 	GST_INFO_OBJECT(
 		mem->allocator,
@@ -289,6 +317,8 @@ static GstMemory* gst_imx_phys_mem_allocator_share(GstMemory *mem, gssize offset
 
 	phys_mem = (GstImxPhysMemory *)mem;
 
+	g_mutex_lock(&(phys_mem->lock));
+
 	if (size == -1)
 		size = ((gssize)(phys_mem->mem.size) > offset) ? (phys_mem->mem.size - offset) : 0;
 
@@ -307,6 +337,7 @@ static GstMemory* gst_imx_phys_mem_allocator_share(GstMemory *mem, gssize offset
 	if (sub == NULL)
 	{
 		GST_ERROR_OBJECT(mem->allocator, "could not create new physmem substructure");
+		g_mutex_unlock(&(phys_mem->lock));
 		return NULL;
 	}
 
@@ -314,6 +345,8 @@ static GstMemory* gst_imx_phys_mem_allocator_share(GstMemory *mem, gssize offset
 	 * mapping is individual to all buffers */
 	sub->phys_addr = phys_mem->phys_addr;
 	sub->internal = phys_mem->internal;
+
+	g_mutex_unlock(&(phys_mem->lock));
 
 	GST_INFO_OBJECT(
 		mem->allocator,

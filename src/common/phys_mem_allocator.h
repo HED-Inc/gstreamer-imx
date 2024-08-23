@@ -74,6 +74,8 @@ struct _GstImxPhysMemory
 	/* pointer for any additional internal data an allocator may define
 	 * not for outside use; allocators do not have to use it */
 	gpointer internal;
+
+	GMutex lock;
 };
 
 
